@@ -1,5 +1,10 @@
 package org.axonframework.extensions.tracing.autoconfig;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.CoreMatchers.notNullValue;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThat;
+
 import org.axonframework.commandhandling.gateway.CommandGateway;
 import org.axonframework.extensions.tracing.OpenTraceDispatchInterceptor;
 import org.axonframework.extensions.tracing.OpenTraceHandlerInterceptor;
@@ -7,8 +12,9 @@ import org.axonframework.extensions.tracing.TracingCommandGateway;
 import org.axonframework.extensions.tracing.TracingQueryGateway;
 import org.axonframework.queryhandling.QueryGateway;
 import org.axonframework.springboot.autoconfig.AxonServerAutoConfiguration;
-import org.junit.*;
-import org.junit.runner.*;
+import org.junit.Ignore;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
@@ -18,10 +24,6 @@ import org.springframework.boot.autoconfigure.web.reactive.function.client.WebCl
 import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.junit4.SpringRunner;
 
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.notNullValue;
-import static org.junit.Assert.*;
-
 @EnableAutoConfiguration(exclude = {
         JmxAutoConfiguration.class,
         WebClientAutoConfiguration.class,
@@ -30,6 +32,7 @@ import static org.junit.Assert.*;
         AxonServerAutoConfiguration.class
 })
 @RunWith(SpringRunner.class)
+@Ignore
 public class AxonAutoConfigurationWithTracingTest {
 
     @Autowired
