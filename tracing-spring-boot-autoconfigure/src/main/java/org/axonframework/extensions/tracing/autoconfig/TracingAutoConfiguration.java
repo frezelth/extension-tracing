@@ -15,7 +15,7 @@
  */
 package org.axonframework.extensions.tracing.autoconfig;
 
-import io.opentracing.Tracer;
+import brave.Tracing;
 import org.axonframework.commandhandling.CommandBus;
 import org.axonframework.commandhandling.gateway.CommandGateway;
 import org.axonframework.config.EventProcessingConfigurer;
@@ -44,29 +44,29 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @AutoConfigureAfter(EventProcessingAutoConfiguration.class)
-@ConditionalOnClass(io.opentracing.Tracer.class)
+@ConditionalOnClass(Tracing.class)
 public class TracingAutoConfiguration {
 
     @Bean
-    public OpenTraceDispatchInterceptor traceDispatchInterceptor(Tracer tracer) {
-        return new OpenTraceDispatchInterceptor(tracer);
+    public OpenTraceDispatchInterceptor traceDispatchInterceptor(Tracing tracing) {
+        return new OpenTraceDispatchInterceptor(tracing);
     }
 
     @Bean
-    public OpenTraceHandlerInterceptor traceHandlerInterceptor(Tracer tracer) {
-        return new OpenTraceHandlerInterceptor(tracer);
+    public OpenTraceHandlerInterceptor traceHandlerInterceptor(Tracing tracing) {
+        return new OpenTraceHandlerInterceptor(tracing);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public QueryGateway queryGateway(Tracer tracer,
+    public QueryGateway queryGateway(Tracing tracing,
                                      QueryBus queryBus,
                                      OpenTraceDispatchInterceptor openTraceDispatchInterceptor,
                                      OpenTraceHandlerInterceptor openTraceHandlerInterceptor) {
         queryBus.registerHandlerInterceptor(openTraceHandlerInterceptor);
         TracingQueryGateway tracingQueryGateway = TracingQueryGateway.builder()
                                                                      .delegateQueryBus(queryBus)
-                                                                     .tracer(tracer)
+                                                                     .tracer(tracing)
                                                                      .build();
         tracingQueryGateway.registerDispatchInterceptor(openTraceDispatchInterceptor);
         return tracingQueryGateway;
@@ -74,13 +74,13 @@ public class TracingAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public CommandGateway commandGateway(Tracer tracer,
+    public CommandGateway commandGateway(Tracing tracing,
                                          CommandBus commandBus,
                                          OpenTraceDispatchInterceptor openTraceDispatchInterceptor,
                                          OpenTraceHandlerInterceptor openTraceHandlerInterceptor) {
         commandBus.registerHandlerInterceptor(openTraceHandlerInterceptor);
         TracingCommandGateway tracingCommandGateway = TracingCommandGateway.builder()
-                                                                           .tracer(tracer)
+                                                                           .tracer(tracing)
                                                                            .delegateCommandBus(commandBus)
                                                                            .build();
         tracingCommandGateway.registerDispatchInterceptor(openTraceDispatchInterceptor);
@@ -88,8 +88,8 @@ public class TracingAutoConfiguration {
     }
 
     @Bean
-    public CorrelationDataProvider tracingProvider(Tracer tracer) {
-        return new TracingProvider(tracer);
+    public CorrelationDataProvider tracingProvider(Tracing tracing) {
+        return new TracingProvider(tracing);
     }
 
     @Autowired

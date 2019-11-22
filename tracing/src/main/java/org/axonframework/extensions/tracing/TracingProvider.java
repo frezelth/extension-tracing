@@ -15,19 +15,16 @@
  */
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.Tracer;
-import io.opentracing.propagation.Format;
+import brave.Tracing;
+import brave.propagation.TraceContext;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.axonframework.messaging.Message;
 import org.axonframework.messaging.MetaData;
 import org.axonframework.messaging.correlation.CorrelationDataProvider;
 
-import java.util.Collections;
-import java.util.Map;
-
-import static java.util.Optional.ofNullable;
-
 /**
- * A {@link CorrelationDataProvider} which uses a {@link MapInjector} to inject a message {@link MetaData} with the
+ * A {@link CorrelationDataProvider} that attaches the current tracing headers as correlation data on the message.
  * active span.
  *
  * @author Christophe Bouhier
@@ -35,27 +32,26 @@ import static java.util.Optional.ofNullable;
  */
 public class TracingProvider implements CorrelationDataProvider {
 
-    private Tracer tracer;
+  private Tracing tracing;
 
     /**
-     * Initialize a {@link CorrelationDataProvider} implementation which uses the provided {@link Tracer} to set the
+     * Initialize a {@link CorrelationDataProvider} implementation which uses the provided {@link Tracing} to set the
      * active span on a {@link Message}'s {@link MetaData}.
      *
-     * @param tracer the {@link Tracer} used to retrieve the active span to be placed on a {@link Message}'s
+     * @param tracing the {@link Tracing} used to retrieve the active span to be placed on a {@link Message}'s
      *               {@link MetaData}
      */
-    public TracingProvider(Tracer tracer) {
-        this.tracer = tracer;
+    public TracingProvider(Tracing tracing) {
+        this.tracing = tracing;
     }
 
     @Override
     public Map<String, ?> correlationDataFor(Message<?> message) {
-        return ofNullable(tracer.activeSpan())
-                .map(activeSpan -> {
-                    MapInjector injector = new MapInjector();
-                    tracer.inject(activeSpan.context(), Format.Builtin.TEXT_MAP, injector);
-                    return injector.getMetaData();
-                })
-                .orElseGet(Collections::emptyMap);
+      TraceContext.Injector<Map> mapInjector = tracing.propagation().injector(Map::put);
+      Map<String, String> headers = new LinkedHashMap();
+      if (tracing.currentTraceContext().get() != null) {
+        mapInjector.inject(tracing.currentTraceContext().get(), headers);
+      }
+      return headers;
     }
 }

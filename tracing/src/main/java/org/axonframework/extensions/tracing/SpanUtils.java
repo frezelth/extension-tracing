@@ -1,6 +1,6 @@
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.Tracer;
+import brave.Span;
 import org.axonframework.commandhandling.CommandMessage;
 import org.axonframework.eventhandling.EventMessage;
 import org.axonframework.messaging.Message;
@@ -10,26 +10,25 @@ import org.axonframework.queryhandling.QueryMessage;
  * Utility class providing methods useful for attaching information to Spans
  */
 public class SpanUtils {
-    private static final String TAG_AXON_PAYLOAD_TYPE = "axon.message.payloadtype";
-    private static final String TAG_AXON_ID = "axon.message.id";
-    private static final String TAG_AXON_MSG_TYPE = "axon.message.type";
-    private static final String TAG_AXON_COMMAND_NAME = "axon.message.commandname";
+    static final String TAG_AXON_PAYLOAD_TYPE = "axon.message.payloadtype";
+    static final String TAG_AXON_ID = "axon.message.id";
+    static final String TAG_AXON_MSG_TYPE = "axon.message.type";
+    static final String TAG_AXON_COMMAND_NAME = "axon.message.commandname";
 
     /**
-     * Registers message-specific tags to the given {@code spanBuilder} based on the given {@code message}.
+     * Registers message-specific tags to the given {@code Span} based on the given {@code message}.
      *
-     * @param spanBuilder The Span Builder to register the tags with
+     * @param span The Span to register the tags with
      * @param message     The message to retrieve details from
      * @return a builder with tags attached
      */
-    public static Tracer.SpanBuilder withMessageTags(Tracer.SpanBuilder spanBuilder, Message<?> message) {
-        Tracer.SpanBuilder sb = spanBuilder.withTag(TAG_AXON_ID, message.getIdentifier())
-                                           .withTag(TAG_AXON_MSG_TYPE, resolveType(message))
-                                           .withTag(TAG_AXON_PAYLOAD_TYPE, message.getPayloadType().getName());
+    public static void withMessageTags(Span span, Message<?> message) {
+        span.tag(TAG_AXON_ID, message.getIdentifier());
+        span.tag(TAG_AXON_MSG_TYPE, resolveType(message));
+        span.tag(TAG_AXON_PAYLOAD_TYPE, message.getPayloadType().getName());
         if (message instanceof CommandMessage) {
-            return sb.withTag(TAG_AXON_COMMAND_NAME, ((CommandMessage<?>) message).getCommandName());
+            span.tag(TAG_AXON_COMMAND_NAME, ((CommandMessage<?>) message).getCommandName());
         }
-        return sb;
     }
 
     /**

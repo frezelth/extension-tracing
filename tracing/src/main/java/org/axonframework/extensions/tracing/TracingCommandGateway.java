@@ -15,10 +15,15 @@
  */
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.Scope;
-import io.opentracing.Span;
-import io.opentracing.Tracer;
-import io.opentracing.tag.Tags;
+import static org.axonframework.common.BuilderUtils.assertNonNull;
+
+import brave.Span;
+import brave.Tracer.SpanInScope;
+import brave.Tracing;
+import java.lang.invoke.MethodHandles;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import org.axonframework.commandhandling.CommandBus;
 import org.axonframework.commandhandling.CommandCallback;
 import org.axonframework.commandhandling.CommandExecutionException;
@@ -36,16 +41,8 @@ import org.axonframework.messaging.MessageDispatchInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.invoke.MethodHandles;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
-
-import static org.axonframework.common.BuilderUtils.assertNonNull;
-import static org.axonframework.extensions.tracing.SpanUtils.withMessageTags;
-
 /**
- * A tracing {@link CommandGateway} which activates a calling {@link Span}, when the {@link CompletableFuture}
+ * A tracing command gateway which activates a calling {@link brave.Span}, when the {@link CompletableFuture} completes.
  * completes. This implementation is a wrapper and as such delegates the actual dispatching of commands to another
  * CommandGateway.
  *
@@ -58,7 +55,7 @@ public class TracingCommandGateway implements CommandGateway {
 
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
-    private final Tracer tracer;
+    private final Tracing tracing;
     private final CommandGateway delegate;
 
     /**
@@ -69,7 +66,7 @@ public class TracingCommandGateway implements CommandGateway {
      * {@link DefaultCommandGateway}. A registered CommandGateway will always take precedence over a configured
      * CommandBus.
      * <p>
-     * The {@link Tracer} and delegate {@link CommandGateway} are <b>hard requirements</b> and as such should be
+     * The {@link Tracing} and {@link CommandBus} are <b>hard requirements</b> and as such should be provided.
      * provided.
      *
      * @return a Builder to be able to create a {@link TracingCommandGateway}
@@ -81,32 +78,32 @@ public class TracingCommandGateway implements CommandGateway {
     /**
      * Instantiate a {@link TracingCommandGateway} based on the fields contained in the {@link Builder}.
      * <p>
-     * Will assert that the {@link Tracer} and delegate {@link CommandGateway} are not {@code null}, and will throw an
+     * Will assert that the {@link Tracing} and delegate {@link CommandGateway} are not {@code null}, and will throw an
      * {@link AxonConfigurationException} if they are.
      *
      * @param builder the {@link Builder} used to instantiate a {@link TracingCommandGateway} instance
      */
     protected TracingCommandGateway(Builder builder) {
         builder.validate();
-        this.tracer = builder.tracer;
+        this.tracing = builder.tracing;
         this.delegate = builder.buildDelegateCommandGateway();
     }
 
     @Override
     public <C, R> void send(C command, CommandCallback<? super C, ? super R> callback) {
         CommandMessage<?> cmd = GenericCommandMessage.asCommandMessage(command);
-        sendWithSpan(tracer, "sendCommandMessage", cmd, (tracer, parentSpan, childSpan) -> {
+        sendWithSpan(tracing, "sendCommandMessage", cmd, (tracer, parentSpan, childSpan) -> {
             CompletableFuture<?> resultReceived = new CompletableFuture<>();
             delegate.send(command, (CommandCallback<C, R>) (commandMessage, commandResultMessage) -> {
-                try (Scope ignored = tracer.scopeManager().activate(parentSpan, false)) {
-                    childSpan.log("resultReceived");
+                try (SpanInScope ignored = tracer.tracer().withSpanInScope(parentSpan)) {
+                    childSpan.annotate("resultReceived");
                     callback.onResult(commandMessage, commandResultMessage);
-                    childSpan.log("afterCallbackInvocation");
+                    childSpan.annotate("afterCallbackInvocation");
                 } finally {
                     resultReceived.complete(null);
                 }
             });
-            childSpan.log("dispatchComplete");
+            childSpan.annotate("dispatchComplete");
             resultReceived.thenRun(childSpan::finish);
         });
     }
@@ -142,7 +139,7 @@ public class TracingCommandGateway implements CommandGateway {
     }
 
     private <R> R doSendAndExtract(Object command,
-                                   Function<FutureCallback<Object, R>, CommandResultMessage<? extends R>> resultExtractor) {
+        Function<FutureCallback<Object, R>, CommandResultMessage<? extends R>> resultExtractor) {
         FutureCallback<Object, R> futureCallback = new FutureCallback<>();
 
         sendAndRestoreParentSpan(command, futureCallback);
@@ -155,23 +152,24 @@ public class TracingCommandGateway implements CommandGateway {
 
     private <R> void sendAndRestoreParentSpan(Object command, FutureCallback<Object, R> futureCallback) {
         CommandMessage<?> cmd = GenericCommandMessage.asCommandMessage(command);
-        sendWithSpan(tracer, "sendCommandMessageAndWait", cmd, (tracer, parentSpan, childSpan) -> {
+        sendWithSpan(tracing, "sendCommandMessageAndWait", cmd, (tracer, parentSpan, childSpan) -> {
             delegate.send(cmd, futureCallback);
-            futureCallback.thenRun(() -> childSpan.log("resultReceived"));
+            futureCallback.thenRun(() -> childSpan.annotate("resultReceived"));
 
-            childSpan.log("dispatchComplete");
+            childSpan.annotate("dispatchComplete");
             futureCallback.thenRun(childSpan::finish);
         });
     }
 
-    private void sendWithSpan(Tracer tracer, String operation, CommandMessage<?> command, SpanConsumer consumer) {
-        Span parent = tracer.activeSpan();
-        Tracer.SpanBuilder spanBuilder = withMessageTags(tracer.buildSpan(operation), command)
-                .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_CLIENT);
-        try (Scope scope = spanBuilder.startActive(false)) {
-            consumer.accept(tracer, parent, scope.span());
+    private void sendWithSpan(Tracing tracing, String operation, CommandMessage<?> command, SpanConsumer consumer) {
+        Span parent = tracing.tracer().currentSpan();
+        final Span newSpan = tracing.tracer().nextSpan().kind(Span.Kind.CLIENT).name(operation);
+        SpanUtils.withMessageTags(newSpan, command);
+        try (SpanInScope ignored = tracing.tracer().withSpanInScope(newSpan)) {
+            consumer.accept(tracing, parent, newSpan);
+        } finally {
+            newSpan.finish();
         }
-        tracer.scopeManager().activate(parent, false);
     }
 
     private RuntimeException asRuntime(Throwable e) {
@@ -193,7 +191,7 @@ public class TracingCommandGateway implements CommandGateway {
     @FunctionalInterface
     private interface SpanConsumer {
 
-        void accept(Tracer tracer, Span activeSpan, Span parentSpan);
+        void accept(Tracing tracer, Span activeSpan, Span parentSpan);
     }
 
     /**
@@ -204,24 +202,24 @@ public class TracingCommandGateway implements CommandGateway {
      * {@link DefaultCommandGateway}. A registered CommandGateway will always take precedence over a configured
      * CommandBus.
      * <p>
-     * The {@link Tracer} and delegate {@link CommandGateway} are <b>hard requirements</b> and as such should be
+     * The {@link Tracing} and delegate {@link CommandGateway} are <b>hard requirements</b> and as such should be
      * provided.
      */
     public static class Builder {
 
-        private Tracer tracer;
+        private Tracing tracing;
         private CommandBus delegateBus;
         private CommandGateway delegateGateway;
 
         /**
-         * Sets the {@link Tracer} used to set a {@link Span} on dispatched {@link CommandMessage}s.
+         * Sets the {@link Tracing} used to set a {@link brave.Span} on dispatched {@link CommandMessage}s.
          *
-         * @param tracer a {@link Tracer} used to set a {@link Span} on dispatched {@link CommandMessage}s.
+         * @param tracer a {@link Tracing} used to set a {@link brave.Span} on dispatched {@link CommandMessage}s.
          * @return the current Builder instance, for fluent interfacing
          */
-        public Builder tracer(Tracer tracer) {
-            assertNonNull(tracer, "Tracer may not be null");
-            this.tracer = tracer;
+        public Builder tracer(Tracing tracing) {
+            assertNonNull(tracing, "Tracer may not be null");
+            this.tracing = tracing;
             return this;
         }
 
@@ -282,7 +280,7 @@ public class TracingCommandGateway implements CommandGateway {
          *                                    specifications
          */
         protected void validate() throws AxonConfigurationException {
-            assertNonNull(tracer, "The Tracer is a hard requirement and should be provided");
+            assertNonNull(tracing, "The Tracer is a hard requirement and should be provided");
             if (delegateBus == null) {
                 assertNonNull(
                         delegateGateway, "The delegate CommandGateway is a hard requirement and should be provided"

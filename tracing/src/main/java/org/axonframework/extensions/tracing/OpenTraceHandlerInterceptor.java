@@ -15,38 +15,43 @@
  */
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.Scope;
-import io.opentracing.SpanContext;
-import io.opentracing.Tracer;
-import io.opentracing.propagation.Format;
-import io.opentracing.tag.Tags;
+import brave.Span;
+import brave.Tracer;
+import brave.Tracing;
+import brave.propagation.TraceContext;
+import brave.propagation.TraceContextOrSamplingFlags;
 import org.axonframework.messaging.InterceptorChain;
 import org.axonframework.messaging.Message;
 import org.axonframework.messaging.MessageHandlerInterceptor;
 import org.axonframework.messaging.MetaData;
 import org.axonframework.messaging.unitofwork.UnitOfWork;
 
-import static org.axonframework.extensions.tracing.SpanUtils.withMessageTags;
-
 
 /**
- * A {@link MessageHandlerInterceptor} which maps the {@link MetaData} to the {@link SpanContext}.
+ *  * A {@link MessageHandlerInterceptor} which maps the {@link MetaData} to the {@link brave.propagation.TraceContext}.
  *
  * @author Christophe Bouhier
  * @since 4.0
  */
 public class OpenTraceHandlerInterceptor implements MessageHandlerInterceptor<Message<?>> {
 
-    private final Tracer tracer;
+    private final Tracing tracing;
+    private final TraceContext.Extractor<Message> commandMessageExtractor;
 
     /**
-     * Initialize a {@link MessageHandlerInterceptor} implementation which uses the provided {@link Tracer} to map span
-     * information from the {@link Message} its {@link MetaData} on a {@link SpanContext}.
+     * Initialize a {@link MessageHandlerInterceptor} implementation which uses the provided {@link Tracing} to map span
+     * information from the {@link Message} its {@link MetaData} on a {@link brave.propagation.TraceContext}.
      *
-     * @param tracer the {@link Tracer} used to set a {@link SpanContext} on from a {@link Message}'s {@link MetaData}
+     * @param tracing the {@link Tracing} used to set a {@link brave.propagation.TraceContext} on from a {@link Message}'s {@link MetaData}
      */
-    public OpenTraceHandlerInterceptor(Tracer tracer) {
-        this.tracer = tracer;
+    public OpenTraceHandlerInterceptor(Tracing tracing) {
+        this.tracing = tracing;
+        commandMessageExtractor = tracing.propagation().extractor((carrier, key) -> {
+            if (carrier.getMetaData().containsKey(key)) {
+                return carrier.getMetaData().get(key).toString();
+            }
+            return null;
+        });
     }
 
     @Override
@@ -54,23 +59,17 @@ public class OpenTraceHandlerInterceptor implements MessageHandlerInterceptor<Me
         MetaData metaData = unitOfWork.getMessage().getMetaData();
 
         String operationName = "handle" + SpanUtils.resolveType(unitOfWork.getMessage());
-        Tracer.SpanBuilder spanBuilder;
-        try {
-            MapExtractor extractor = new MapExtractor(metaData);
-            SpanContext parentSpan = tracer.extract(Format.Builtin.TEXT_MAP, extractor);
-
-            if (parentSpan == null) {
-                spanBuilder = tracer.buildSpan(operationName);
-            } else {
-                spanBuilder = tracer.buildSpan(operationName).asChildOf(parentSpan);
-            }
-        } catch (IllegalArgumentException e) {
-            spanBuilder = tracer.buildSpan(operationName);
+        TraceContextOrSamplingFlags extracted = commandMessageExtractor.extract(unitOfWork.getMessage());
+        Span span;
+        if (extracted == null) {
+            span = tracing.tracer().nextSpan();
+        } else {
+            span = tracing.tracer().nextSpan(extracted);
         }
-
-        try (Scope scope = withMessageTags(spanBuilder, unitOfWork.getMessage()).withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_SERVER).startActive(false)) {
-            //noinspection unchecked
-            unitOfWork.onCleanup(u -> scope.span().finish());
+        span.name(operationName).kind(Span.Kind.SERVER).start();
+        SpanUtils.withMessageTags(span, unitOfWork.getMessage());
+        try(Tracer.SpanInScope ignored = tracing.tracer().withSpanInScope(span)) {
+            unitOfWork.onCleanup(u -> span.finish());
             return interceptorChain.proceed();
         }
     }

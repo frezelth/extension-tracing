@@ -1,55 +1,67 @@
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.ScopeManager;
-import io.opentracing.mock.MockSpan;
-import io.opentracing.mock.MockTracer;
-import org.axonframework.messaging.GenericMessage;
-import org.axonframework.messaging.Message;
-import org.axonframework.messaging.MetaData;
-import org.junit.*;
+import static java.lang.Long.toHexString;
+import static org.hamcrest.CoreMatchers.is;
+import static org.junit.Assert.assertThat;
 
+import brave.ScopedSpan;
+import brave.Tracing;
+import brave.propagation.StrictScopeDecorator;
+import brave.propagation.ThreadLocalCurrentTraceContext;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.BiFunction;
-
-import static java.lang.Long.valueOf;
-import static org.hamcrest.CoreMatchers.is;
-import static org.junit.Assert.*;
+import org.axonframework.messaging.GenericMessage;
+import org.axonframework.messaging.Message;
+import org.axonframework.messaging.MetaData;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import zipkin2.Span;
 
 public class OpenTraceDispatchInterceptorTest {
 
     private OpenTraceDispatchInterceptor openTraceDispatchInterceptor;
-    private MockTracer mockTracer;
+    private List<Span> spans = new ArrayList<>();
+    private Tracing tracing;
 
     @Before
     public void before() {
-        mockTracer = new MockTracer();
-        openTraceDispatchInterceptor = new OpenTraceDispatchInterceptor(mockTracer);
+        tracing = Tracing
+            .newBuilder()
+            .localServiceName("axon-tracing")
+            .currentTraceContext(ThreadLocalCurrentTraceContext.newBuilder().
+                addScopeDecorator(StrictScopeDecorator.create()).build())
+            .spanReporter(spans::add)
+            .build();
+        openTraceDispatchInterceptor = new OpenTraceDispatchInterceptor(tracing);
     }
 
     @After
-    public void after() {
-        mockTracer.scopeManager().active().close();
+    public void close() {
+        Tracing.current().close();
+        spans.clear();
     }
 
     @Test
     public void testDispatch() {
-        MockSpan span = mockTracer.buildSpan("test").start();
-        ScopeManager scopeManager = mockTracer.scopeManager();
-        scopeManager.activate(span, false);
+        final ScopedSpan testSpan = Tracing.currentTracer().startScopedSpan("test");
 
         GenericMessage<String> msg = new GenericMessage<>("Payload");
         BiFunction<Integer, Message<?>, Message<?>> handle =
                 openTraceDispatchInterceptor.handle(Collections.singletonList(msg));
 
-        // This interceptor has no side effects on the spans in the tracer.
-        List<MockSpan> mockSpans = mockTracer.finishedSpans();
-        assertThat(mockSpans.isEmpty(), is(true));
-
         Message<?> apply = handle.apply(0, msg);
         MetaData metaData = apply.getMetaData();
-        assertThat(metaData.size(), is(2));
-        assertThat(metaData.get("spanid"), is(valueOf(span.context().spanId()).toString()));
-        assertThat(metaData.get("traceid"), is(valueOf(span.context().traceId()).toString()));
+        metaData.entrySet().forEach(entry -> System.out.println(entry.getKey() + "->" + entry.getValue()));
+        // verify that the message has the span headers attached to it
+        assertThat(metaData.size(), is(3));
+        assertThat(metaData.get("X-B3-TraceId"), is(toHexString(testSpan.context().spanId())));
+        assertThat(metaData.get("X-B3-SpanId"), is(toHexString(testSpan.context().traceId())));
+        assertThat(metaData.get("X-B3-Sampled"), is("1"));
+
+        testSpan.finish();
+        assertThat(spans.size(), is(1));
     }
 }

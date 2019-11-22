@@ -15,21 +15,17 @@
  */
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.Scope;
-import io.opentracing.ScopeManager;
-import io.opentracing.Span;
-import io.opentracing.SpanContext;
-import io.opentracing.Tracer;
-import io.opentracing.propagation.Format;
+import brave.Tracing;
+import brave.propagation.TraceContext.Injector;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BiFunction;
 import org.axonframework.messaging.Message;
 import org.axonframework.messaging.MessageDispatchInterceptor;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.function.BiFunction;
-
 /**
- * A {@link MessageDispatchInterceptor} which maps the {@link SpanContext} to
+ * A {@link MessageDispatchInterceptor} which maps the {@link brave.propagation.TraceContext} to
  * {@link org.axonframework.messaging.MetaData}.
  *
  * @author Christophe Bouhier
@@ -37,30 +33,25 @@ import java.util.function.BiFunction;
  */
 public class OpenTraceDispatchInterceptor implements MessageDispatchInterceptor<Message<?>> {
 
-    private final Tracer tracer;
+    private final Tracing tracing;
 
     /**
-     * Initialize a {@link MessageDispatchInterceptor} implementation which uses the provided {@link Tracer} to map a
-     * {@link SpanContext} on an ingested {@link Message}.
+     * Initialize a {@link MessageDispatchInterceptor} implementation which uses the provided {@link Tracing} to map a
+     * {@link brave.propagation.TraceContext} on an ingested {@link Message}.
      *
-     * @param tracer the {@link Tracer} used to set a {@link SpanContext} on {@link Message}s
+     * @param tracing the {@link Tracing} used to set a {@link brave.propagation.TraceContext} on {@link Message}s
      */
-    public OpenTraceDispatchInterceptor(Tracer tracer) {
-        this.tracer = tracer;
+    public OpenTraceDispatchInterceptor(Tracing tracing) {
+        this.tracing = tracing;
     }
 
     @Override
     public BiFunction<Integer, Message<?>, Message<?>> handle(List<? extends Message<?>> messages) {
-        ScopeManager scopeManager = tracer.scopeManager();
-        Optional<SpanContext> spanContextOptional = Optional.ofNullable(scopeManager)
-                                                            .map(ScopeManager::active)
-                                                            .map(Scope::span)
-                                                            .map(Span::context);
-
-        return spanContextOptional.<BiFunction<Integer, Message<?>, Message<?>>>map(spanContext -> (index, message) -> {
-            MapInjector injector = new MapInjector();
-            tracer.inject(spanContext, Format.Builtin.TEXT_MAP, injector);
-            return message.andMetaData(injector.getMetaData());
-        }).orElseGet(() -> (i, m) -> m);
+        return (integer, message) -> {
+            Injector<Map> mapInjector = tracing.propagation().injector(Map::put);
+            Map<String, String> headers = new LinkedHashMap();
+            mapInjector.inject(tracing.currentTraceContext().get(), headers);
+            return message.andMetaData(headers);
+        };
     }
 }

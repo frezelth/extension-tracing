@@ -15,9 +15,14 @@
  */
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.Scope;
-import io.opentracing.Span;
-import io.opentracing.Tracer;
+import static org.axonframework.common.BuilderUtils.assertNonNull;
+
+import brave.Span;
+import brave.Tracer;
+import brave.Tracing;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.axonframework.common.AxonConfigurationException;
 import org.axonframework.common.Registration;
 import org.axonframework.messaging.MessageDispatchInterceptor;
@@ -29,14 +34,8 @@ import org.axonframework.queryhandling.QueryMessage;
 import org.axonframework.queryhandling.SubscriptionQueryBackpressure;
 import org.axonframework.queryhandling.SubscriptionQueryResult;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
-
-import static org.axonframework.common.BuilderUtils.assertNonNull;
-
 /**
- * A tracing {@link QueryGateway} which activates a calling {@link Span}, when the {@link CompletableFuture} completes.
+ * A tracing query gateway which activates a calling {@link brave.Span}, when the {@link CompletableFuture} completes.
  * This implementation is a wrapper and as such delegates the actual dispatching of queries to another QueryGateway.
  * <p>
  * Note that this implementation <b>>does not</b> support tracing for calls towards
@@ -49,7 +48,7 @@ import static org.axonframework.common.BuilderUtils.assertNonNull;
  */
 public class TracingQueryGateway implements QueryGateway {
 
-    private final Tracer tracer;
+    private final Tracing tracing;
     private final QueryGateway delegate;
 
     /**
@@ -59,7 +58,7 @@ public class TracingQueryGateway implements QueryGateway {
      * queries to. If a QueryBus is provided directly, it will be used to instantiate a {@link DefaultQueryGateway}.
      * A registered QueryGateway will always take precedence over a configured QueryBus.
      * <p>
-     * The {@link Tracer} and delegate {@link QueryGateway} are <b>hard requirements</b> and as such should be
+     * The {@link Tracing} and delegate {@link QueryGateway} are <b>hard requirements</b> and as such should be
      * provided.
      *
      * @return a Builder to be able to create a {@link TracingQueryGateway}
@@ -71,26 +70,23 @@ public class TracingQueryGateway implements QueryGateway {
     /**
      * Instantiate a {@link TracingQueryGateway} based on the fields contained in the {@link Builder}.
      * <p>
-     * Will assert that the {@link Tracer} and delegate {@link QueryGateway} are not {@code null}, and will throw an
+     * Will assert that the {@link Tracing} and delegate {@link QueryGateway} are not {@code null}, and will throw an
      * {@link AxonConfigurationException} if they are.
      *
      * @param builder the {@link Builder} used to instantiate a {@link TracingQueryGateway} instance
      */
     protected TracingQueryGateway(Builder builder) {
         builder.validate();
-        this.tracer = builder.tracer;
+        this.tracing = builder.tracing;
         this.delegate = builder.buildDelegateQueryGateway();
     }
 
     @Override
     public <R, Q> CompletableFuture<R> query(String queryName, Q query, ResponseType<R> responseType) {
-        Span parentSpan = tracer.activeSpan();
-        try (Scope scope = tracer.buildSpan(queryName).startActive(false)) {
-            Span span = scope.span();
-            return delegate.query(queryName, query, responseType).whenComplete((r, e) -> {
-                span.finish();
-                tracer.scopeManager().activate(parentSpan, false);
-            });
+        Span newSpan = tracing.tracer().nextSpan().name(queryName).start();
+        try (Tracer.SpanInScope ignored = tracing.tracer().withSpanInScope(newSpan)) {
+            return delegate.query(queryName, query, responseType)
+                .whenComplete((r, e) -> newSpan.finish());
         }
     }
 
@@ -128,24 +124,24 @@ public class TracingQueryGateway implements QueryGateway {
      * queries to. If a QueryBus is provided directly, it will be used to instantiate a {@link DefaultQueryGateway}.
      * A registered QueryGateway will always take precedence over a configured QueryBus.
      * <p>
-     * The {@link Tracer} and delegate {@link QueryGateway} are <b>hard requirements</b> and as such should be
+     * The {@link Tracing} and delegate {@link QueryGateway} are <b>hard requirements</b> and as such should be
      * provided.
      */
     public static class Builder {
 
-        private Tracer tracer;
+        private Tracing tracing;
         private QueryBus delegateBus;
         private QueryGateway delegateGateway;
 
         /**
          * Sets the {@link Tracer} used to set a {@link Span} on dispatched {@link QueryMessage}s.
          *
-         * @param tracer a {@link Tracer} used to set a {@link Span} on dispatched {@link QueryMessage}s.
+         * @param tracing a {@link Tracing} used to set a {@link Span} on dispatched {@link QueryMessage}s.
          * @return the current Builder instance, for fluent interfacing
          */
-        public Builder tracer(Tracer tracer) {
-            assertNonNull(tracer, "Tracer may not be null");
-            this.tracer = tracer;
+        public Builder tracer(Tracing tracing) {
+            assertNonNull(tracing, "Tracing may not be null");
+            this.tracing = tracing;
             return this;
         }
 
@@ -206,7 +202,7 @@ public class TracingQueryGateway implements QueryGateway {
          *                                    specifications
          */
         protected void validate() throws AxonConfigurationException {
-            assertNonNull(tracer, "The Tracer is a hard requirement and should be provided");
+            assertNonNull(tracing, "The Tracing is a hard requirement and should be provided");
             if (delegateBus == null) {
                 assertNonNull(
                         delegateGateway, "The delegate QueryGateway is a hard requirement and should be provided"

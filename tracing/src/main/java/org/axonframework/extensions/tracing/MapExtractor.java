@@ -15,52 +15,13 @@
  */
 package org.axonframework.extensions.tracing;
 
-import io.opentracing.propagation.TextMap;
-import org.axonframework.messaging.MetaData;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.HashMap;
-import java.util.Iterator;
+import brave.propagation.TraceContext;
+import brave.propagation.TraceContextOrSamplingFlags;
 import java.util.Map;
 
-/**
- * An implementation of {@link TextMap}, to extract tracing fields from {@link MetaData}.
- *
- * @author Christophe Bouhier
- * @since 4.0
- */
-public class MapExtractor implements TextMap {
+public class MapExtractor implements TraceContext.Extractor<Map<String, String>> {
 
-    private static final Logger logger = LoggerFactory.getLogger(MapExtractor.class);
-
-    private Map<String, String> extracted = new HashMap<>();
-
-    /**
-     * Instantiate a {@link MapExtractor} used to retrieve tracing fields from the given {@link MetaData}.
-     *
-     * @param metaData the {@link MetaData} to retrieve tracing fields from
-     */
-    public MapExtractor(MetaData metaData) {
-        metaData.entrySet().forEach(
-                entry -> {
-                    if (entry.getValue() instanceof String) {
-                        if (logger.isDebugEnabled()) {
-                            logger.debug("Extracting metadata entry: {}", entry);
-                        }
-                        extracted.put(entry.getKey(), (String) entry.getValue());
-                    }
-                }
-        );
-    }
-
-    @Override
-    public Iterator<Map.Entry<String, String>> iterator() {
-        return extracted.entrySet().iterator();
-    }
-
-    @Override
-    public void put(String key, String value) {
-        throw new UnsupportedOperationException("The iterator() method should only be used with Tracer.extract()");
+    public TraceContextOrSamplingFlags extract(Map<String, String> carrier) {
+        return null;
     }
 }
