@@ -163,7 +163,7 @@ public class TracingCommandGateway implements CommandGateway {
 
     private void sendWithSpan(Tracing tracing, String operation, CommandMessage<?> command, SpanConsumer consumer) {
         Span parent = tracing.tracer().currentSpan();
-        final Span newSpan = tracing.tracer().nextSpan().kind(Span.Kind.CLIENT).name(operation);
+        final Span newSpan = tracing.tracer().nextSpan().kind(Span.Kind.CLIENT).name(operation).start();
         SpanUtils.withMessageTags(newSpan, command);
         try (SpanInScope ignored = tracing.tracer().withSpanInScope(newSpan)) {
             consumer.accept(tracing, parent, newSpan);
